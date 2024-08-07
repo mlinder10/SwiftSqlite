@@ -18,17 +18,31 @@ struct User: Queryable, Insertable {
   ]}
 }
 
+struct Posts: Queryable, Insertable {
+  let id: Int
+  let title: String
+  let body: String
+  let userId: Int
+  
+  static var table: String { "posts" }
+  static var cols: [String: String] {["user_id": "userId"]}
+  var inserts: [String: Arg] {[
+    "id": .int(id),
+    "title": .string(title),
+    "body": .string(body),
+    "user_id": .int(userId)
+  ]}
+}
+
 final class SqliteTests: XCTestCase {
   func testExample() throws {
-    // XCTest Documentation
-    // https://developer.apple.com/documentation/xctest
-    
-    // Defining Test Cases and Test Methods
-    // https://developer.apple.com/documentation/xctest/defining_test_cases_and_test_methods
+
     let path = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first! + "/test.sqlite3"
     try Database.shared.connect(path: path)
 
     let _ = try Database.shared.execute("DROP TABLE IF EXISTS users")
+
+    let _ = try Database.shared.execute("DROP TABLE IF EXISTS posts")
     
     let _ = try Database.shared.execute(
       """
@@ -38,6 +52,18 @@ final class SqliteTests: XCTestCase {
           weight FLOAT NOT NULL,
           meta BLOB NOT NULL,
           gf INTEGER
+        )
+      """
+    )
+
+    let _ = try Database.shared.execute(
+      """
+        CREATE TABLE IF NOT EXISTS posts (
+          id INTEGER PRIMARY KEY,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id)
         )
       """
     )
@@ -52,12 +78,26 @@ final class SqliteTests: XCTestCase {
     let _ = try Database.shared.insert(multiUser)
     let _ = try Database.shared.insert(singleUser)
 
+    let multiPosts = [
+      Posts(id: 1, title: "Post 1", body: "Body 1", userId: 1),
+      Posts(id: 2, title: "Post 2", body: "Body 2", userId: 1),
+      Posts(id: 3, title: "Post 3", body: "Body 3", userId: 2),
+    ]
+
+    // let _ = try Database.shared.insert(multiPosts)
+    let _ = try Database.shared.transaction()
+      .insert(multiPosts)
+      .run()
+
     let users = try User.query("SELECT * FROM users ORDER BY id ASC")
 
+    let posts = try Posts.query("SELECT * FROM posts WHERE user_id = ?", [.int(1)])
+
     print(users)
+    print(posts)
 
     let _ = try Database.shared.execute("DELETE FROM users")
-
     let _ = try Database.shared.execute("DROP TABLE users")
+    let _ = try Database.shared.execute("DROP TABLE posts")
   }
 }

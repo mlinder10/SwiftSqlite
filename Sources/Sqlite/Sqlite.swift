@@ -149,7 +149,6 @@ public final class Database {
         let key = columnNames[Int(index)]
         let type = columnTypes[Int(index)]
         if let val = getColumnValue(index: index, type: type, stmt: stmt) {
-          //            NSLog("Column type:\(type) with value:\(val)")
           row[key] = val
         }
       }
@@ -172,7 +171,6 @@ public final class Database {
     let realTypes = ["DECIMAL", "DOUBLE", "DOUBLE PRECISION", "FLOAT", "NUMERIC", "REAL"]
     // Determine type of column - http://www.sqlite.org/c3ref/c_blob.html
     let buf = sqlite3_column_decltype(stmt, index)
-    //    NSLog("SQLiteDB - Got column type: \(buf)")
     if buf != nil {
       var tmp = String(validatingUTF8: buf!)!.uppercased()
       // Remove bracketed section
@@ -182,7 +180,6 @@ public final class Database {
       // Remove unsigned?
       // Remove spaces
       // Is the data type in any of the pre-set values?
-      //      NSLog("SQLiteDB - Cleaned up column type: \(tmp)")
       if intTypes.contains(tmp) {
         return SQLITE_INTEGER
       }
@@ -295,8 +292,6 @@ extension Queryable {
       for key in Self.cols.keys {
         row.switchKey(from: key, to: Self.cols[key]!)
       }
-      let rowStr = "\n\n[\n\t" + row.map { "\($0.key): \($0.value)" }.joined(separator: ",\n\t") + "\n]"
-      NSLog(rowStr)
       let data = try JSONSerialization.data(withJSONObject: row)
       return try JSONDecoder().decode(Self.self, from: data)
     }
@@ -312,31 +307,47 @@ public protocol Insertable {
   var inserts: [String: Arg] { get }
 }
 
-extension Database {
-  public func insert<T: Insertable>(_ object: T) throws -> Int {
-    let keys = Array(object.inserts.keys)
+extension Insertable {
+  fileprivate func createSql() -> (String, [Arg]) {
+    let keys = Array(self.inserts.keys)
     let sql =
       """
-        INSERT INTO \(T.table)
+        INSERT INTO \(Self.table)
           (\(keys.joined(separator: ", ")))
         VALUES
-          (\(object.inserts.values.map { _ in "?" }.joined(separator: ", ")))
+          (\(self.inserts.values.map { _ in "?" }.joined(separator: ", ")))
       """
-    let args = keys.map { object.inserts[$0]! }
+    let args = keys.map { self.inserts[$0]! }
+    return (sql, args)
+  }
+}
+
+extension Array where Element: Insertable {
+  // all elements should be of the same type and the array should not be empty
+  public func insert() -> (String, [Arg]) {
+    let keys = self.first!.inserts.keys
+    let sql =
+      """
+        INSERT INTO \(Self.Element.table)
+          (\(keys.joined(separator: ", ")))
+        VALUES
+          \(self.map({ "(" + $0.inserts.keys.map({ _ in "?" }).joined(separator: ", ")  + ")" }).joined(separator: ", "))
+      """
+    let args = self.flatMap({ obj in keys.map({ obj.inserts[$0]! }) })
+
+    return (sql, args)
+  }
+}
+
+extension Database {
+  public func insert<T: Insertable>(_ object: T) throws -> Int {
+    let (sql, args) = object.createSql()
     return try Database.shared.execute(sql, args)
   }
   
   public func insert<T: Insertable>(_ objects: [T]) throws -> Int {
     if objects.isEmpty { return 0 }
-    let keys = objects.first!.inserts.keys
-    let sql =
-      """
-        INSERT INTO \(T.table)
-          (\(keys.joined(separator: ", ")))
-        VALUES
-          \(objects.map({ "(" + $0.inserts.keys.map({ _ in "?" }).joined(separator: ", ")  + ")" }).joined(separator: ", "))
-      """
-    let args = objects.flatMap({ obj in keys.map({ obj.inserts[$0]! }) })
+    let (sql, args) = objects.insert()
     return try Database.shared.execute(sql, args)
   }
 }
@@ -372,30 +383,14 @@ public final class Transaction {
   }
   
   public func insert<T: Insertable>(_ object: T) -> Self {
-    let keys = Array(object.inserts.keys)
-    let sql =
-      """
-        INSERT INTO \(T.table)
-          (\(keys.joined(separator: ", ")))
-        VALUES
-          (\(object.inserts.values.map { _ in "?" }.joined(separator: ", ")))
-      """
-    let args = keys.map { object.inserts[$0]! }
+    let (sql, args) = object.createSql()
     self.stmts.append(Statement(type: .execute, sql: sql, args: args))
     return self
   }
   
   public func insert<T: Insertable>(_ objects: [T]) -> Self {
     if objects.isEmpty { return self }
-    let keys = Array(objects.first!.inserts.keys)
-    let sql =
-      """
-        INSERT INTO \(T.table)
-          (\(keys.joined(separator: ", ")))
-        VALUES
-          \(objects.map({ "(" + $0.inserts.values.map({ _ in "?" }).joined(separator: ", ") + ")" }))
-      """
-    let args = objects.flatMap({ obj in keys.map({ obj.inserts[$0]! }) })
+    let (sql, args) = objects.insert()
     self.stmts.append(Statement(type: .execute, sql: sql, args: args))
     return self
   }
